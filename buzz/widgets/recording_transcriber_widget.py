@@ -1,6 +1,7 @@
 import os
 import re
 import enum
+import time
 import requests
 import logging
 import datetime
@@ -212,7 +213,7 @@ class RecordingTranscriberWidget(QWidget):
         self.presentation_options_bar.hide()
         self.copy_actions_bar = self.create_copy_actions_bar()
         layout.addWidget(self.copy_actions_bar)  # Add at the bottom
-        self.copy_actions_bar.hide() 
+        self.copy_actions_bar.hide()
 
     def create_presentation_options_bar(self) -> QWidget:
         """Crete the presentation options bar widget"""
@@ -296,15 +297,15 @@ class RecordingTranscriberWidget(QWidget):
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(10)
-        
+
         layout.addStretch()  # Push button to the right
-        
+
         self.copy_transcript_button = QPushButton(_("Copy"), bar)
         self.copy_transcript_button.setToolTip(_("Copy transcription to clipboard"))
         self.copy_transcript_button.clicked.connect(self.on_copy_transcript_clicked)
         layout.addWidget(self.copy_transcript_button)
-        
-        return bar  
+
+        return bar
 
     def on_copy_transcript_clicked(self):
         """Handle copy transcript button click"""
@@ -339,7 +340,7 @@ class RecordingTranscriberWidget(QWidget):
 
         self.copy_transcript_button.setText(_("Copied!"))
         QTimer.singleShot(2000, lambda: self.copy_transcript_button.setText(_("Copy")))
-                
+
     def on_show_presentation_clicked(self):
         """Handle click on 'Show in new window' button"""
         if self.presentation_window is None or not self.presentation_window.isVisible():
@@ -668,6 +669,40 @@ class RecordingTranscriberWidget(QWidget):
 
         return text
 
+    @staticmethod
+    def write_to_export_file(file_path: str, content: str, mode: str = "a", retries: int = 5, delay: float = 0.2):
+        """Write to an export file with retry logic for Windows file locking."""
+        for attempt in range(retries):
+            try:
+                with open(file_path, mode, encoding='utf-8') as f:
+                    f.write(content)
+                return
+            except PermissionError:
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                else:
+                    logging.warning("Export write failed after %d retries: %s", retries, file_path)
+            except OSError as e:
+                logging.warning("Export write failed: %s", e)
+                return
+
+    @staticmethod
+    def read_export_file(file_path: str, retries: int = 5, delay: float = 0.2) -> str:
+        """Read an export file with retry logic for Windows file locking."""
+        for attempt in range(retries):
+            try:
+                with open(file_path, "r", encoding='utf-8') as f:
+                    return f.read()
+            except PermissionError:
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                else:
+                    logging.warning("Export read failed after %d retries: %s", retries, file_path)
+            except OSError as e:
+                logging.warning("Export read failed: %s", e)
+                return ""
+        return ""
+
     # Copilot magic implementation of a sliding window approach to find the longest common substring between two texts,
     # ignoring the initial differences.
     @staticmethod
@@ -722,8 +757,7 @@ class RecordingTranscriberWidget(QWidget):
         text_box.moveCursor(QTextCursor.MoveOperation.End)
 
         if self.export_enabled and export_file:
-            with open(export_file, "w") as f:
-                f.write(merged_texts)
+            self.write_to_export_file(export_file, merged_texts, mode="w")
 
     def on_next_transcription(self, text: str):
         text = self.filter_text(text)
@@ -742,8 +776,7 @@ class RecordingTranscriberWidget(QWidget):
             self.transcription_text_box.moveCursor(QTextCursor.MoveOperation.End)
 
             if self.export_enabled and self.transcript_export_file:
-                with open(self.transcript_export_file, "a") as f:
-                    f.write(text + "\n\n")
+                self.write_to_export_file(self.transcript_export_file, text + "\n\n")
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_ABOVE:
             self.transcription_text_box.moveCursor(QTextCursor.MoveOperation.Start)
@@ -752,13 +785,11 @@ class RecordingTranscriberWidget(QWidget):
             self.transcription_text_box.moveCursor(QTextCursor.MoveOperation.Start)
 
             if self.export_enabled and self.transcript_export_file:
-                with open(self.transcript_export_file, "r") as f:
-                    existing_content = f.read()
-
+                existing_content = ""
+                if os.path.isfile(self.transcript_export_file):
+                    existing_content = self.read_export_file(self.transcript_export_file)
                 new_content = text + "\n\n" + existing_content
-
-                with open(self.transcript_export_file, "w") as f:
-                    f.write(new_content)
+                self.write_to_export_file(self.transcript_export_file, new_content, mode="w")
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_AND_CORRECT:
             self.process_transcription_merge(text, self.transcripts, self.transcription_text_box, self.transcript_export_file)
@@ -792,9 +823,8 @@ class RecordingTranscriberWidget(QWidget):
             self.translation_text_box.insertPlainText(self.strip_newlines(text))
             self.translation_text_box.moveCursor(QTextCursor.MoveOperation.End)
 
-            if self.export_enabled:
-                with open(self.translation_export_file, "a") as f:
-                    f.write(text + "\n\n")
+            if self.export_enabled and self.translation_export_file:
+                self.write_to_export_file(self.translation_export_file, text + "\n\n")
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_ABOVE:
             self.translation_text_box.moveCursor(QTextCursor.MoveOperation.Start)
@@ -802,14 +832,12 @@ class RecordingTranscriberWidget(QWidget):
             self.translation_text_box.insertPlainText("\n\n")
             self.translation_text_box.moveCursor(QTextCursor.MoveOperation.Start)
 
-            if self.export_enabled:
-                with open(self.translation_export_file, "r") as f:
-                    existing_content = f.read()
-
+            if self.export_enabled and self.translation_export_file:
+                existing_content = ""
+                if os.path.isfile(self.translation_export_file):
+                    existing_content = self.read_export_file(self.translation_export_file)
                 new_content = text + "\n\n" + existing_content
-
-                with open(self.translation_export_file, "w") as f:
-                    f.write(new_content)
+                self.write_to_export_file(self.translation_export_file, new_content, mode="w")
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_AND_CORRECT:
             self.process_transcription_merge(text, self.translations, self.translation_text_box, self.translation_export_file)
@@ -842,6 +870,7 @@ class RecordingTranscriberWidget(QWidget):
 
     def on_transcriber_finished(self):
         self.reset_record_button()
+        # Restart amplitude listener now that the transcription stream is closed
         self.reset_recording_amplitude_listener()
 
     def on_transcriber_error(self, error: str):
@@ -899,6 +928,16 @@ class RecordingTranscriberWidget(QWidget):
             self.model_loader.cancel()
 
         self.stop_recording()
+        if self.transcription_thread is not None:
+            try:
+                if self.transcription_thread.isRunning():
+                    if not self.transcription_thread.wait(15_000):
+                        logging.warning("Transcription thread did not finish within timeout")
+            except RuntimeError:
+                # The underlying C++ QThread was already deleted via deleteLater()
+                pass
+            self.transcription_thread = None
+
         if self.recording_amplitude_listener is not None:
             self.recording_amplitude_listener.stop_recording()
             self.recording_amplitude_listener.deleteLater()

@@ -94,6 +94,8 @@ jobs:
         run: |
           uv run make test
         shell: bash
+        env:
+          PYTHONFAULTHANDLER: "1"
 
       - name: Upload coverage reports to Codecov with GitHub Action
         uses: codecov/codecov-action@v4
@@ -174,10 +176,10 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - uses: AnimMouse/setup-ffmpeg@v1.2.1
+      - uses: AnimMouse/setup-ffmpeg@v1
         id: setup-ffmpeg
         with:
-          version: ${{ matrix.os == 'macos-15-intel' && '7.1.1' || matrix.os == 'macos-latest' && '71' || '7.1' }}
+          version: ${{ matrix.os == 'macos-15-intel' && '7.1.1' || matrix.os == 'macos-latest' && '80' || '8.0' }}
 
       - name: Install MSVC for Windows
         run: |

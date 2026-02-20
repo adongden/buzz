@@ -1,12 +1,8 @@
 import os
-import time
-import logging
 from threading import Thread, Event
 from typing import Callable, Any
-from unittest.mock import MagicMock
 
 import numpy as np
-import sounddevice
 
 from buzz import whisper_audio
 
@@ -103,7 +99,7 @@ class MockInputStream:
 
     def __init__(
         self,
-        callback: Callable[[np.ndarray, int, Any, sounddevice.CallbackFlags], None],
+        callback: Callable[[np.ndarray, int, Any, Any], None],
         *args,
         **kwargs,
     ):
@@ -131,7 +127,7 @@ class MockInputStream:
             if self._stop_event.is_set():
                 break
             chunk = audio[seek : seek + num_samples_in_chunk]
-            self.callback(chunk, 0, None, sounddevice.CallbackFlags())
+            self.callback(chunk, 0, None, None)
             seek += num_samples_in_chunk
 
             # loop back around

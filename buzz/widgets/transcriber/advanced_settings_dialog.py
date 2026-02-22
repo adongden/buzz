@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QFormLayout,
     QLabel,
+    QDoubleSpinBox,
+    QLineEdit,
 )
 
 from buzz.locale import _
@@ -23,7 +25,10 @@ class AdvancedSettingsDialog(QDialog):
     transcription_options_changed = pyqtSignal(TranscriptionOptions)
 
     def __init__(
-        self, transcription_options: TranscriptionOptions, parent: QWidget | None = None
+        self,
+        transcription_options: TranscriptionOptions,
+        parent: QWidget | None = None,
+        show_recording_settings: bool = False,
     ):
         super().__init__(parent)
 
@@ -74,22 +79,43 @@ class AdvancedSettingsDialog(QDialog):
         self.enable_llm_translation_checkbox.stateChanged.connect(self.on_enable_llm_translation_changed)
         layout.addRow("", self.enable_llm_translation_checkbox)
 
-        self.llm_model_line_edit = LineEdit(self.transcription_options.llm_model, self)
+        llm_model = self.transcription_options.llm_model or "gpt-4.1-mini"
+        self.llm_model_line_edit = LineEdit(llm_model, self)
         self.llm_model_line_edit.textChanged.connect(
             self.on_llm_model_changed
         )
         self.llm_model_line_edit.setMinimumWidth(170)
         self.llm_model_line_edit.setEnabled(self.transcription_options.enable_llm_translation)
-        self.llm_model_line_edit.setPlaceholderText("gpt-4.1-mini")
         layout.addRow(_("AI model:"), self.llm_model_line_edit)
 
-        self.llm_prompt_text_edit = QPlainTextEdit(self.transcription_options.llm_prompt)
+        default_llm_prompt = self.transcription_options.llm_prompt or _(
+            "Please translate each text sent to you from English to Spanish."
+        )
+        self.llm_prompt_text_edit = QPlainTextEdit(default_llm_prompt)
         self.llm_prompt_text_edit.setEnabled(self.transcription_options.enable_llm_translation)
-        self.llm_prompt_text_edit.setPlaceholderText(_("Enter instructions for AI on how to translate, for example 'Please translate each text sent to you from English to Spanish.'"))
         self.llm_prompt_text_edit.setMinimumWidth(170)
         self.llm_prompt_text_edit.setFixedHeight(115)
         self.llm_prompt_text_edit.textChanged.connect(self.on_llm_prompt_changed)
         layout.addRow(_("Instructions for AI:"), self.llm_prompt_text_edit)
+
+        if show_recording_settings:
+            recording_settings_title = _("Recording settings")
+            recording_settings_title_label = QLabel(f"<h4>{recording_settings_title}</h4>", self)
+            layout.addRow("", recording_settings_title_label)
+
+            self.silence_threshold_spin_box = QDoubleSpinBox(self)
+            self.silence_threshold_spin_box.setRange(0.0, 1.0)
+            self.silence_threshold_spin_box.setSingleStep(0.0005)
+            self.silence_threshold_spin_box.setDecimals(4)
+            self.silence_threshold_spin_box.setValue(transcription_options.silence_threshold)
+            self.silence_threshold_spin_box.valueChanged.connect(self.on_silence_threshold_changed)
+            layout.addRow(_("Silence threshold:"), self.silence_threshold_spin_box)
+
+            self.line_separator_line_edit = QLineEdit(self)
+            line_sep_display = repr(transcription_options.line_separator)[1:-1] or r"\n\n"
+            self.line_separator_line_edit.setText(line_sep_display)
+            self.line_separator_line_edit.textChanged.connect(self.on_line_separator_changed)
+            layout.addRow(_("Line separator:"), self.line_separator_line_edit)
 
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton(QDialogButtonBox.StandardButton.Ok), self
@@ -100,7 +126,6 @@ class AdvancedSettingsDialog(QDialog):
         layout.addWidget(button_box)
 
         self.setLayout(layout)
-        self.resize(self.sizeHint())
 
     def on_temperature_changed(self, text: str):
         try:
@@ -131,4 +156,15 @@ class AdvancedSettingsDialog(QDialog):
         self.transcription_options.llm_prompt = (
             self.llm_prompt_text_edit.toPlainText()
         )
+        self.transcription_options_changed.emit(self.transcription_options)
+
+    def on_silence_threshold_changed(self, value: float):
+        self.transcription_options.silence_threshold = value
+        self.transcription_options_changed.emit(self.transcription_options)
+
+    def on_line_separator_changed(self, text: str):
+        try:
+            self.transcription_options.line_separator = text.encode().decode("unicode_escape")
+        except UnicodeDecodeError:
+            return
         self.transcription_options_changed.emit(self.transcription_options)

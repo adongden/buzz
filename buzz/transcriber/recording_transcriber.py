@@ -39,6 +39,7 @@ class RecordingTranscriber(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
     amplitude_changed = pyqtSignal(float)
+    average_amplitude_changed = pyqtSignal(float)
     is_running = False
     SAMPLE_RATE = whisper_audio.SAMPLE_RATE
 
@@ -75,6 +76,7 @@ class RecordingTranscriber(QObject):
             key=Settings.Key.OPENAI_API_MODEL, default_value="whisper-1"
         )
         self.process = None
+        self._stderr_lines: list[bytes] = []
 
     def start(self):
         self.is_running = True
@@ -179,6 +181,7 @@ class RecordingTranscriber(QObject):
                         self.mutex.release()
 
                         amplitude = self.amplitude(samples)
+                        self.average_amplitude_changed.emit(amplitude)
 
                         logging.debug(
                             "Processing next frame, sample size = %s, queue size = %s, amplitude = %s",
@@ -187,7 +190,7 @@ class RecordingTranscriber(QObject):
                             amplitude,
                         )
 
-                        if amplitude < 0.025:
+                        if amplitude < self.transcription_options.silence_threshold:
                             time.sleep(0.5)
                             continue
 
@@ -350,7 +353,7 @@ class RecordingTranscriber(QObject):
         # Try to enqueue the next block. If the queue is already full, drop the block.
         chunk: np.ndarray = in_data.ravel()
 
-        amplitude = float(np.sqrt(np.mean(chunk**2)))
+        amplitude = self.amplitude(chunk)
         self.amplitude_changed.emit(amplitude)
 
         with self.mutex:
@@ -359,7 +362,12 @@ class RecordingTranscriber(QObject):
 
     @staticmethod
     def amplitude(arr: np.ndarray):
-        return (abs(max(arr)) + abs(min(arr))) / 2
+        return float(np.sqrt(np.mean(arr**2)))
+
+    def _drain_stderr(self):
+        if self.process and self.process.stderr:
+            for line in self.process.stderr:
+                self._stderr_lines.append(line)
 
     def stop_recording(self):
         self.is_running = False
@@ -435,6 +443,12 @@ class RecordingTranscriber(QObject):
             logging.error(error_msg)
             return
 
+        # Drain stderr in a background thread to prevent pipe buffer from filling
+        # up and blocking the subprocess (especially on Windows with compiled exe).
+        self._stderr_lines = []
+        stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        stderr_thread.start()
+
         # Wait for server to start and load model, checking periodically
         for i in range(100):  # 10 seconds total, in 0.1s increments
             if not self.is_running or self.process.poll() is not None:
@@ -446,9 +460,8 @@ class RecordingTranscriber(QObject):
             logging.debug(f"Whisper server started successfully.")
             logging.debug(f"Model: {self.model_path}")
         else:
-            stderr_output = ""
-            if self.process.stderr is not None:
-                stderr_output = self.process.stderr.read().decode()
+            stderr_thread.join(timeout=2)
+            stderr_output = b"".join(self._stderr_lines).decode(errors="replace")
             logging.error(f"Whisper server failed to start. Error: {stderr_output}")
 
             self.transcription.emit(_("Whisper server failed to start. Check logs for details."))

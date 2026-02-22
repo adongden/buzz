@@ -150,6 +150,14 @@ class RecordingTranscriberWidget(QWidget):
             llm_prompt=self.settings.value(
                 key=Settings.Key.RECORDING_TRANSCRIBER_LLM_PROMPT, default_value=""
             ),
+            silence_threshold=self.settings.value(
+                key=Settings.Key.RECORDING_TRANSCRIBER_SILENCE_THRESHOLD,
+                default_value=0.0025,
+            ),
+            line_separator=self.settings.value(
+                key=Settings.Key.RECORDING_TRANSCRIBER_LINE_SEPARATOR,
+                default_value="\n\n",
+            ),
         )
 
         self.audio_devices_combo_box = AudioDevicesComboBox(self)
@@ -170,6 +178,7 @@ class RecordingTranscriberWidget(QWidget):
             default_transcription_options=self.transcription_options,
             model_types=model_types,
             parent=self,
+            show_recording_settings=True,
         )
         self.transcription_options_group_box.transcription_options_changed.connect(
             self.on_transcription_options_changed
@@ -181,7 +190,8 @@ class RecordingTranscriberWidget(QWidget):
         self.audio_meter_widget = AudioMeterWidget(self)
 
         record_button_layout = QHBoxLayout()
-        record_button_layout.addWidget(self.audio_meter_widget)
+        record_button_layout.setContentsMargins(0, 4, 0, 8)
+        record_button_layout.addWidget(self.audio_meter_widget, alignment=Qt.AlignmentFlag.AlignVCenter)
         record_button_layout.addWidget(self.record_button)
 
         layout.addWidget(self.transcription_options_group_box)
@@ -194,10 +204,11 @@ class RecordingTranscriberWidget(QWidget):
             self.translation_text_box.hide()
 
         self.setLayout(layout)
-        self.resize(550, 500)
+        self.resize(550, 600)
 
         self.reset_recording_amplitude_listener()
 
+        self._closing = False
         self.transcript_export_file = None
         self.translation_export_file = None
         self.export_enabled = self.settings.value(
@@ -235,7 +246,7 @@ class RecordingTranscriberWidget(QWidget):
         layout.addWidget(text_size_label)
 
         self.text_size_spinbox = QSpinBox(bar)
-        self.text_size_spinbox.setRange(12, 72) #12pt to 72pt
+        self.text_size_spinbox.setRange(10, 100) #10pt to 100pt
 
         saved_text_size = self.settings.value(
             Settings.Key.PRESENTATION_WINDOW_TEXT_SIZE,
@@ -509,6 +520,9 @@ class RecordingTranscriberWidget(QWidget):
         self.recording_amplitude_listener.amplitude_changed.connect(
             self.on_recording_amplitude_changed, Qt.ConnectionType.QueuedConnection
         )
+        self.recording_amplitude_listener.average_amplitude_changed.connect(
+            self.audio_meter_widget.update_average_amplitude, Qt.ConnectionType.QueuedConnection
+        )
         self.recording_amplitude_listener.start_recording()
 
     def on_record_button_clicked(self):
@@ -518,6 +532,9 @@ class RecordingTranscriberWidget(QWidget):
             if self.recording_amplitude_listener is not None:
                 self.recording_amplitude_listener.amplitude_changed.disconnect(
                     self.on_recording_amplitude_changed
+                )
+                self.recording_amplitude_listener.average_amplitude_changed.disconnect(
+                    self.audio_meter_widget.update_average_amplitude
                 )
                 self.recording_amplitude_listener.stop_recording()
                 self.recording_amplitude_listener = None
@@ -586,6 +603,9 @@ class RecordingTranscriberWidget(QWidget):
         self.transcriber.transcription.connect(self.on_next_transcription)
         self.transcriber.amplitude_changed.connect(
             self.on_recording_amplitude_changed, Qt.ConnectionType.QueuedConnection
+        )
+        self.transcriber.average_amplitude_changed.connect(
+            self.audio_meter_widget.update_average_amplitude, Qt.ConnectionType.QueuedConnection
         )
 
         # Stop the separate amplitude listener to avoid two streams on the same device
@@ -771,24 +791,24 @@ class RecordingTranscriberWidget(QWidget):
         if self.transcriber_mode == RecordingTranscriberMode.APPEND_BELOW:
             self.transcription_text_box.moveCursor(QTextCursor.MoveOperation.End)
             if len(self.transcription_text_box.toPlainText()) > 0:
-                self.transcription_text_box.insertPlainText("\n\n")
+                self.transcription_text_box.insertPlainText(self.transcription_options.line_separator)
             self.transcription_text_box.insertPlainText(text)
             self.transcription_text_box.moveCursor(QTextCursor.MoveOperation.End)
 
             if self.export_enabled and self.transcript_export_file:
-                self.write_to_export_file(self.transcript_export_file, text + "\n\n")
+                self.write_to_export_file(self.transcript_export_file, text + self.transcription_options.line_separator)
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_ABOVE:
             self.transcription_text_box.moveCursor(QTextCursor.MoveOperation.Start)
             self.transcription_text_box.insertPlainText(text)
-            self.transcription_text_box.insertPlainText("\n\n")
+            self.transcription_text_box.insertPlainText(self.transcription_options.line_separator)
             self.transcription_text_box.moveCursor(QTextCursor.MoveOperation.Start)
 
             if self.export_enabled and self.transcript_export_file:
                 existing_content = ""
                 if os.path.isfile(self.transcript_export_file):
                     existing_content = self.read_export_file(self.transcript_export_file)
-                new_content = text + "\n\n" + existing_content
+                new_content = text + self.transcription_options.line_separator + existing_content
                 self.write_to_export_file(self.transcript_export_file, new_content, mode="w")
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_AND_CORRECT:
@@ -819,24 +839,24 @@ class RecordingTranscriberWidget(QWidget):
         if self.transcriber_mode == RecordingTranscriberMode.APPEND_BELOW:
             self.translation_text_box.moveCursor(QTextCursor.MoveOperation.End)
             if len(self.translation_text_box.toPlainText()) > 0:
-                self.translation_text_box.insertPlainText("\n\n")
+                self.translation_text_box.insertPlainText(self.transcription_options.line_separator)
             self.translation_text_box.insertPlainText(self.strip_newlines(text))
             self.translation_text_box.moveCursor(QTextCursor.MoveOperation.End)
 
             if self.export_enabled and self.translation_export_file:
-                self.write_to_export_file(self.translation_export_file, text + "\n\n")
+                self.write_to_export_file(self.translation_export_file, text + self.transcription_options.line_separator)
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_ABOVE:
             self.translation_text_box.moveCursor(QTextCursor.MoveOperation.Start)
             self.translation_text_box.insertPlainText(self.strip_newlines(text))
-            self.translation_text_box.insertPlainText("\n\n")
+            self.translation_text_box.insertPlainText(self.transcription_options.line_separator)
             self.translation_text_box.moveCursor(QTextCursor.MoveOperation.Start)
 
             if self.export_enabled and self.translation_export_file:
                 existing_content = ""
                 if os.path.isfile(self.translation_export_file):
                     existing_content = self.read_export_file(self.translation_export_file)
-                new_content = text + "\n\n" + existing_content
+                new_content = text + self.transcription_options.line_separator + existing_content
                 self.write_to_export_file(self.translation_export_file, new_content, mode="w")
 
         elif self.transcriber_mode == RecordingTranscriberMode.APPEND_AND_CORRECT:
@@ -917,26 +937,50 @@ class RecordingTranscriberWidget(QWidget):
         self.audio_meter_widget.update_amplitude(amplitude)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._closing:
+            # Second call after deferred close — proceed normally
+            self._do_close()
+            super().closeEvent(event)
+            return
+
+        if self.current_status == self.RecordingStatus.RECORDING:
+            # Defer the close until the transcription thread finishes to avoid
+            # blocking the GUI thread with a synchronous wait.
+            event.ignore()
+            self._closing = True
+
+            if self.model_loader is not None:
+                self.model_loader.cancel()
+
+            self.stop_recording()
+
+            # Connect to QThread.finished — the transcriber C++ object may already
+            # be scheduled for deletion via deleteLater() by this point.
+            thread = self.transcription_thread
+            if thread is not None:
+                try:
+                    if thread.isRunning():
+                        thread.finished.connect(self._on_close_transcriber_finished)
+                    else:
+                        self._on_close_transcriber_finished()
+                except RuntimeError:
+                    self._on_close_transcriber_finished()
+            else:
+                self._on_close_transcriber_finished()
+            return
+
+        self._do_close()
+        super().closeEvent(event)
+
+    def _on_close_transcriber_finished(self):
+        self.transcription_thread = None
+        self.close()
+
+    def _do_close(self):
         #Close presentation window if open
         if self.presentation_window:
             self.presentation_window.close()
             self.presentation_window = None
-
-            self.fullscreen_button.setEnabled(False)
-
-        if self.model_loader is not None:
-            self.model_loader.cancel()
-
-        self.stop_recording()
-        if self.transcription_thread is not None:
-            try:
-                if self.transcription_thread.isRunning():
-                    if not self.transcription_thread.wait(15_000):
-                        logging.warning("Transcription thread did not finish within timeout")
-            except RuntimeError:
-                # The underlying C++ QThread was already deleted via deleteLater()
-                pass
-            self.transcription_thread = None
 
         if self.recording_amplitude_listener is not None:
             self.recording_amplitude_listener.stop_recording()
@@ -947,11 +991,8 @@ class RecordingTranscriberWidget(QWidget):
             self.translator.stop()
 
         if self.translation_thread is not None:
+            # Just request quit — do not block the GUI thread waiting for it
             self.translation_thread.quit()
-            # Only wait if thread is actually running
-            if self.translation_thread.isRunning():
-                if not self.translation_thread.wait(45_000):
-                    logging.warning("Translation thread did not finish within timeout")
 
         self.settings.set_value(
             Settings.Key.RECORDING_TRANSCRIBER_LANGUAGE,
@@ -983,5 +1024,11 @@ class RecordingTranscriberWidget(QWidget):
             Settings.Key.RECORDING_TRANSCRIBER_LLM_PROMPT,
             self.transcription_options.llm_prompt,
         )
-
-        return super().closeEvent(event)
+        self.settings.set_value(
+            Settings.Key.RECORDING_TRANSCRIBER_SILENCE_THRESHOLD,
+            self.transcription_options.silence_threshold,
+        )
+        self.settings.set_value(
+            Settings.Key.RECORDING_TRANSCRIBER_LINE_SEPARATOR,
+            self.transcription_options.line_separator,
+        )

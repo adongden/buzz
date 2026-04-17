@@ -137,7 +137,9 @@ class WhisperFileTranscriber(FileTranscriber):
                 logging.debug("Whisper process was terminated (exit code: %s), treating as cancellation", self.current_process.exitcode)
                 raise Exception("Transcription was canceled")
             else:
-                raise Exception(self.error_message or "Unknown error")
+                error = self.error_message or "Unknown error"
+                logging.error("Whisper process failed (exit code: %s): %s", self.current_process.exitcode, error)
+                raise Exception(error)
 
         return self.segments
 
@@ -372,7 +374,7 @@ class WhisperFileTranscriber(FileTranscriber):
             ]
 
         result: dict = model.transcribe(
-            audio=task.file_path,
+            audio=whisper_audio.load_audio(task.file_path),
             language=task.transcription_options.language,
             task=task.transcription_options.task.value,
             temperature=task.transcription_options.temperature,
